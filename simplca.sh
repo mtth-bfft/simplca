@@ -2,7 +2,7 @@
 
 # Configuration variables
 # (do not edit these, or your changes will be lost at every update:
-# instead put your customisations in a separate anon_certificate.local)
+# instead put your customisations in a separate simplca.local.sh script)
 
 pushd `dirname $0` > /dev/null
 CA_DIR=`pwd`
@@ -14,13 +14,15 @@ CA_CRL="${CA_DIR}/crl.pem"
 CA_SERIAL="${CA_DIR}/serial.txt"
 CA_INDEX="${CA_DIR}/certindex.txt"
 CA_CERTS="${CA_DIR}/certs"
+CA_CONFIG="${CA_DIR}/openssl.cnf"
 CA_SERIAL_START="100001"
 
 CRT_DURATION=3650 # days
 CRL_DURATION=10   # days
 RSA_KEYSIZE=4096
-OPENSSL_CNF="${CA_DIR}/openssl.cnf"
 DIGEST_ALGO=sha256
+
+[ -r ${CA_DIR}/simplca.local.sh ] && source ${CA_DIR}/simplca.local.sh
 
 # Bash "safe" mode
 set -euo pipefail
@@ -35,10 +37,10 @@ function confirm_prompt {
 }
 
 function show_usage {
-    echo "Usage: $0 init [-c local_conf.sh] [-y]" >&2
-    echo "       $0 issue-server <alphanumeric_id> [-c local_conf.sh] [-y] " >&2
-    echo "       $0 issue-client <alphanumeric_id> [-c local_conf.sh] [-y] " >&2
-    echo "       $0 revoke <alphanumeric_id> [-c local_conf.sh] [-y] " >&2
+    echo "Usage: $0 init [-y]" >&2
+    echo "       $0 issue-server <alphanumeric_id> [-y] " >&2
+    echo "       $0 issue-client <alphanumeric_id> [-y] " >&2
+    echo "       $0 revoke <alphanumeric_id> [-y] " >&2
     echo "       $0 cleanup [-y] " >&2
 }
 
@@ -113,7 +115,7 @@ EOF
 }
 
 function ca_exists {
-    [ -f ${OPENSSL_CNF} ] && return 0
+    [ -f ${CA_CONFIG} ] && return 0
     [ -f ${CA_CRT} ] && return 0
     [ -f ${CA_KEY} ] && return 0
     [ -d ${CA_CERTS} ] && return 0
@@ -124,7 +126,7 @@ function ca_cleanup {
     if ! [ $BATCH -eq 1 ] && ! confirm_prompt "About to remove CA. Continue?"; then
         die "user abort, no modification."
     fi
-    rm -rf "${OPENSSL_CNF}" ${CA_DIR}/*.pem ${CA_DIR}/*.key "${CA_CERTS}"
+    rm -rf "${CA_CONFIG}" ${CA_DIR}/*.pem ${CA_DIR}/*.key "${CA_CERTS}"
     rm -f ${CA_INDEX}* ${CA_SERIAL}*
 }
 
@@ -132,28 +134,28 @@ function ca_init {
     if ca_exists; then
         ca_cleanup || die "user abort, no modification."
     fi
-    gen_openssl_cnf > ${OPENSSL_CNF}
+    gen_openssl_cnf > ${CA_CONFIG}
     echo "${CA_SERIAL_START}" > ${CA_SERIAL}
     touch "${CA_INDEX}"
     mkdir "${CA_CERTS}"
     openssl genrsa -out "${CA_KEY}" ${RSA_KEYSIZE}
-    openssl req -new -batch -x509 -key "${CA_KEY}" -config "${OPENSSL_CNF}" -out "${CA_CRT}"
-    openssl ca -gencrl -out "${CA_CRL}" -config "${OPENSSL_CNF}" -extensions v3_ca
+    openssl req -new -batch -x509 -key "${CA_KEY}" -config "${CA_CONFIG}" -out "${CA_CRT}"
+    openssl ca -gencrl -out "${CA_CRL}" -config "${CA_CONFIG}" -extensions v3_ca
     chmod 0600 "${CA_KEY}"
 }
 
 function ca_issue_server {
     CSR=$(mktemp)
-    openssl req -new -batch -nodes -keyout "${CA_DIR}/${CERTID}.key" -out "${CSR}" -config "${OPENSSL_CNF}"
-    openssl ca -batch -subj "/CN=${CERTID}/" -in "${CSR}" -out "${CA_DIR}/${CERTID}.pem" -config "${OPENSSL_CNF}" -extensions req_server
+    openssl req -new -batch -nodes -keyout "${CA_DIR}/${CERTID}.key" -out "${CSR}" -config "${CA_CONFIG}"
+    openssl ca -batch -subj "/CN=${CERTID}/" -in "${CSR}" -out "${CA_DIR}/${CERTID}.pem" -config "${CA_CONFIG}" -extensions req_server
     chmod 0600 "${CA_DIR}/${CERTID}.key"
     rm -f "${CSR}"
 }
 
 function ca_issue_client {
     CSR=$(mktemp)
-    openssl req -new -batch -nodes -keyout "${CA_DIR}/${CERTID}.key" -out "${CSR}" -config "${OPENSSL_CNF}"
-    openssl ca -batch -subj "/CN=${CERTID}/" -in "${CSR}" -out "${CA_DIR}/${CERTID}.pem" -config "${OPENSSL_CNF}" -extensions req_client
+    openssl req -new -batch -nodes -keyout "${CA_DIR}/${CERTID}.key" -out "${CSR}" -config "${CA_CONFIG}"
+    openssl ca -batch -subj "/CN=${CERTID}/" -in "${CSR}" -out "${CA_DIR}/${CERTID}.pem" -config "${CA_CONFIG}" -extensions req_client
     chmod 0600 "${CA_DIR}/${CERTID}.key"
     rm -f "${CSR}"
 }
@@ -173,7 +175,7 @@ CERTID=''
 case $CMD in
     issue-client|issue-server|revoke)
         [ $# -gt 0 ] || die "command $CMD requires an alphanumeric argument"
-	[[ "$1" =~ ^[a-zA-Z0-9]+$ ]] || die "invalid argument for command $CMD"
+	[[ "$1" =~ ^[a-zA-Z0-9_-]+$ ]] || die "invalid argument for command $CMD"
         CERTID=$1
 	shift ;;
     init|cleanup) ;;
@@ -182,24 +184,11 @@ case $CMD in
 esac
 
 # Read optional arguments
-OPTIND=1
-BATCH=0
-while getopts ":hyc:" opt; do
-    case $opt in
-        h)
-            show_usage
-            exit 0 ;;
-        y)
-            BATCH=1 ;;
-        c)
-            if ! [ -z "$OPTARG" ]; then
-                [ -r "$OPTARG" ] || die "could not read configuration file $OPTARG"
-                source "$OPTARG"
-            fi ;;
-        :)
-            die "Option -c requires an argument" ;;
-	*)
-            die "Invalid option: -$OPTARG" ;;
+while [ $# -gt 0 ]; do
+    case $1 in
+        h|-help) show_usage; exit 0 ;;
+        y|-yes) BATCH=1 ;;
+        *) die "Invalid command line option: $1" ;;
     esac
 done
 
