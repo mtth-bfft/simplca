@@ -28,6 +28,7 @@ DIGEST_ALGO=sha256
 set -euo pipefail
 
 function confirm_prompt {
+    [ $BATCH -eq 1 ] && return 0
     read -r -n1 -p "${1:-Continue?} [y/N] " yn
     echo
     case $yn in
@@ -40,6 +41,7 @@ function show_usage {
     echo "Usage: $0 init [-y]" >&2
     echo "       $0 issue-server <alphanumeric_id> [-y] " >&2
     echo "       $0 issue-client <alphanumeric_id> [-y] " >&2
+    echo "       $0 gen-crl " >&2
     echo "       $0 revoke <alphanumeric_id> [-y] " >&2
     echo "       $0 cleanup [-y] " >&2
 }
@@ -123,17 +125,14 @@ function ca_exists {
 }
 
 function ca_cleanup {
-    if ! [ $BATCH -eq 1 ] && ! confirm_prompt "About to remove CA. Continue?"; then
+    if ca_exists && ! confirm_prompt "About to remove CA. Continue?"; then
         die "user abort, no modification."
     fi
-    rm -rf "${CA_CONFIG}" ${CA_DIR}/*.pem ${CA_DIR}/*.key "${CA_CERTS}"
-    rm -f ${CA_INDEX}* ${CA_SERIAL}*
+    rm -rf "${CA_CONFIG}" "${CA_CERTS}" ${CA_DIR}/*.pem ${CA_DIR}/*.key ${CA_INDEX}* ${CA_SERIAL}*
 }
 
 function ca_init {
-    if ca_exists; then
-        ca_cleanup || die "user abort, no modification."
-    fi
+    ca_cleanup
     gen_openssl_cnf > ${CA_CONFIG}
     echo "${CA_SERIAL_START}" > ${CA_SERIAL}
     touch "${CA_INDEX}"
@@ -146,18 +145,34 @@ function ca_init {
 
 function ca_issue_server {
     CSR=$(mktemp)
+    [ -f ${CA_DIR}/${CERTID}.key ] && die "identifier already in use. Please choose another one."
     openssl req -new -batch -nodes -keyout "${CA_DIR}/${CERTID}.key" -out "${CSR}" -config "${CA_CONFIG}"
-    openssl ca -batch -subj "/CN=${CERTID}/" -in "${CSR}" -out "${CA_DIR}/${CERTID}.pem" -config "${CA_CONFIG}" -extensions req_server
-    chmod 0600 "${CA_DIR}/${CERTID}.key"
-    rm -f "${CSR}"
+    if confirm_prompt "About to issue a server certificate for '${CERTID}'. Continue?"; then
+        openssl ca -batch -subj "/CN=${CERTID}/" -in "${CSR}" -out "${CA_DIR}/${CERTID}.pem" -config "${CA_CONFIG}" -extensions req_server
+        chmod 0600 "${CA_DIR}/${CERTID}.key"
+        rm -f "${CSR}"
+    else
+        rm -f "${CSR}" "${CA_DIR}/${CERTID}.key"
+	die "user abort, no modification."
+    fi
 }
 
 function ca_issue_client {
     CSR=$(mktemp)
+    [ -f ${CA_DIR}/${CERTID}.key ] && die "identifier already in use. Please choose another one."
     openssl req -new -batch -nodes -keyout "${CA_DIR}/${CERTID}.key" -out "${CSR}" -config "${CA_CONFIG}"
-    openssl ca -batch -subj "/CN=${CERTID}/" -in "${CSR}" -out "${CA_DIR}/${CERTID}.pem" -config "${CA_CONFIG}" -extensions req_client
-    chmod 0600 "${CA_DIR}/${CERTID}.key"
-    rm -f "${CSR}"
+    if confirm_prompt "About to issue a client certificate for '${CERTID}'. Continue?"; then
+        openssl ca -batch -subj "/CN=${CERTID}/" -in "${CSR}" -out "${CA_DIR}/${CERTID}.pem" -config "${CA_CONFIG}" -extensions req_client
+        chmod 0600 "${CA_DIR}/${CERTID}.key"
+        rm -f "${CSR}"
+    else
+        rm -f "${CSR}" "${CA_DIR}/${CERTID}.key"
+	die "user abort, no modification"
+    fi
+}
+
+function ca_gen_crl {
+    openssl ca -batch -gencrl -keyfile "${CA_KEY}" -cert "${CA_CRT}" -out "${CA_CRL}" -config "${CA_CONFIG}"
 }
 
 function ca_revoke {
@@ -178,18 +193,20 @@ case $CMD in
 	[[ "$1" =~ ^[a-zA-Z0-9_-]+$ ]] || die "invalid argument for command $CMD"
         CERTID=$1
 	shift ;;
-    init|cleanup) ;;
+    init|cleanup|gen-crl) ;;
     *)
         die "unknown command $CMD"
 esac
 
 # Read optional arguments
+BATCH=0
 while [ $# -gt 0 ]; do
     case $1 in
-        h|-help) show_usage; exit 0 ;;
-        y|-yes) BATCH=1 ;;
+        -h|--help) show_usage; exit 0 ;;
+        -y|--yes) BATCH=1 ;;
         *) die "Invalid command line option: $1" ;;
     esac
+    shift
 done
 
 # Call the appropriate function
@@ -197,6 +214,7 @@ case $CMD in
     init) ca_init ;;
     issue-server) ca_issue_server ;;
     issue-client) ca_issue_client ;;
+    gen-crl) ca_gen_crl ;;
     revoke) ca_revoke ;;
     cleanup) ca_cleanup ;;
 esac
