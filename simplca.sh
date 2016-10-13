@@ -148,7 +148,7 @@ function ca_issue_server {
     [ -f ${CA_DIR}/${CERTID}.key ] && die "identifier already in use. Please choose another one."
     openssl req -new -batch -nodes -keyout "${CA_DIR}/${CERTID}.key" -out "${CSR}" -config "${CA_CONFIG}"
     if confirm_prompt "About to issue a server certificate for '${CERTID}'. Continue?"; then
-        openssl ca -batch -subj "/CN=${CERTID}/" -in "${CSR}" -out "${CA_DIR}/${CERTID}.pem" -config "${CA_CONFIG}" -extensions req_server
+        openssl ca -batch -subj "/CN=${CERTID}/" -in "${CSR}" -notext -out "${CA_DIR}/${CERTID}.pem" -config "${CA_CONFIG}" -extensions req_server
         chmod 0600 "${CA_DIR}/${CERTID}.key"
         rm -f "${CSR}"
     else
@@ -162,7 +162,7 @@ function ca_issue_client {
     [ -f ${CA_DIR}/${CERTID}.key ] && die "identifier already in use. Please choose another one."
     openssl req -new -batch -nodes -keyout "${CA_DIR}/${CERTID}.key" -out "${CSR}" -config "${CA_CONFIG}"
     if confirm_prompt "About to issue a client certificate for '${CERTID}'. Continue?"; then
-        openssl ca -batch -subj "/CN=${CERTID}/" -in "${CSR}" -out "${CA_DIR}/${CERTID}.pem" -config "${CA_CONFIG}" -extensions req_client
+        openssl ca -batch -subj "/CN=${CERTID}/" -in "${CSR}" -notext -out "${CA_DIR}/${CERTID}.pem" -config "${CA_CONFIG}" -extensions req_client
         chmod 0600 "${CA_DIR}/${CERTID}.key"
         rm -f "${CSR}"
     else
