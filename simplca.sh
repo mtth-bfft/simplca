@@ -4,6 +4,8 @@
 # (do not edit these, or your changes will be lost at every update:
 # instead put your customisations in a separate simplca.local.sh script)
 
+set -euo pipefail
+
 CA_DIR="$(dirname $0)"
 CA_NAME="ca"
 CA_SERIAL="${CA_DIR}/serial.txt"
@@ -165,7 +167,6 @@ function ca_get_cert_type {
 # Takes an alphanumeric ID or serial number, returns 0 if and only if certificate hasn't been revoked yet
 function ca_is_cert_revoked {
     INDEX="$(ca_get_index "$1")"
-    ca_gen_crl &>/dev/null
     ! cat "${CA_CRT}" "${CA_CRL}" | openssl verify -crl_check -CAfile /dev/stdin "${CA_CERTS}/${INDEX}.pem" &>/dev/null
 }
 
@@ -191,10 +192,11 @@ function ca_init {
 }
 
 function ca_list {
-    echo -e "type\trevoked\tidentifier"
+    echo -e "type\tstatus\tidentifier"
     for CERTID in $(cat "${CA_INDEX}" | awk '{print $(NF-2)}'); do
-        ca_is_cert_revoked "$CERTID" && revoked="yes" || revoked="no"
-        echo -e "$(ca_get_cert_type $CERTID)\t${revoked}\t$(ca_get_subject $CERTID)"
+        INDEX="$(ca_get_index "$CERTID")" || continue
+        ca_is_cert_revoked "$INDEX" && revoked="revoked" || revoked="valid"
+        echo -e "$(ca_get_cert_type $INDEX)\t${revoked}\t$(ca_get_subject $INDEX)"
     done
 }
 
@@ -244,7 +246,9 @@ function ca_gen_crl {
 function ca_revoke {
     ca_exists || die "please initialise your CA first"
     INDEX="$(ca_get_index "$1")" || die "identifier not found."
-    confirm_prompt "About to revoke $(ca_get_cert_type "$1") certificate for '$1'. Continue?" || exit 1
+    TYPE="$(ca_get_cert_type "$1")"
+    [ "$TYPE" = "ca" ] && die "cannot revoke CA itself, only child certificates"
+    confirm_prompt "About to revoke $TYPE certificate for '$1'. Continue?" || exit 1
     openssl ca -revoke "${CA_CERTS}/${INDEX}.pem" -config "${CA_CONFIG}"
     ca_gen_crl >/dev/null
     echo "Certificate successfully revoked, CRL updated." >&2    
@@ -253,37 +257,39 @@ function ca_revoke {
 which openssl >/dev/null 2>&1 || die "please install OpenSSL before proceeding"
 [ $# -gt 0 ] || { show_usage ; exit 1 ; }
 
-# Read optional arguments
-BATCH=0
-while true; do
-    case $1 in
-        -h|--help) show_usage; exit 0 ;;
-        -y|--yes) BATCH=1 ;;
-        *) break ;;
-    esac
-    shift
-done
-
-# Read one option as the main command
+# Read one arg as the main command
 CMD=$1
+CERTID=''
 shift
 case $CMD in
     issue-client|issue-server|revoke|get-key|get-cert)
         [ $# -gt 0 ] || die "command $CMD requires an alphanumeric argument"
 	echo "$1" | grep -qE '^[a-zA-Z0-9_-]+$' || die "invalid argument for command $CMD"
+        CERTID="$1"
+        shift
 esac
+
+# Read optional arguments
+BATCH=0
+while [ $# -gt 0 ]; do
+    case $1 in
+        -h|--help) show_usage; exit 0 ;;
+        -y|--yes) BATCH=1 ;;
+        *) die "unknown option '$1'" ;;
+    esac
+    shift
+done
 
 # Call the appropriate function
 case $CMD in
     init) ca_init ;;
-    issue-server) ca_issue_server "$1" ;;
-    issue-client) ca_issue_client "$1" ;;
-    revoke) ca_revoke "$1" ;;
-    get-key) ca_get_key "$1" ;;
-    get-cert) ca_get_cert "$1" ;;
+    issue-server) ca_issue_server "$CERTID" ;;
+    issue-client) ca_issue_client "$CERTID" ;;
+    revoke) ca_revoke "$CERTID" ;;
+    get-key) ca_get_key "$CERTID" ;;
+    get-cert) ca_get_cert "$CERTID" ;;
     list) ca_list ;;
     gen-crl) ca_gen_crl ;;
     cleanup) ca_cleanup ;;
-    *)
-        die "unknown command $CMD"
+    *) show_usage ; exit 1 ;;
 esac
