@@ -135,26 +135,26 @@ function ca_get_index {
 
 # Takes an alphanumeric ID or serial number, gives the entier /CN= subject
 function ca_get_subject {
-    ca_get_cert "$1" | openssl x509 -subject -noout | sed 's/subject= //'
+    cat "$(ca_get_cert "$1")" | openssl x509 -subject -noout | sed 's/subject= //'
 }
 
-# Takes an alphanumeric ID or serial number, gives the certificate contents
+# Takes an alphanumeric ID or serial number, gives the certificate path
 function ca_get_cert {
-    [ -f "${CA_CERTS}/$1.pem" ] && cat "${CA_CERTS}/$1.pem" && return
+    [ -f "${CA_CERTS}/$1.pem" ] && echo "${CA_CERTS}/$1.pem" && return
     INDEX=$(ca_get_index "$1") || die "identifier not found."
-    cat "${CA_CERTS}/${INDEX}.pem"
+    echo "${CA_CERTS}/${INDEX}.pem"
 }
 
-# Takes an alphanumeric ID or serial number, gives the private key contents
+# Takes an alphanumeric ID or serial number, gives the private key path
 function ca_get_key {
-    [ -f "${CA_KEYS}/$1.key" ] && cat "${CA_KEYS}/$1.key" && return
+    [ -f "${CA_KEYS}/$1.key" ] && echo "${CA_KEYS}/$1.key" && return
     INDEX=$(ca_get_index "$1") || die "identifier not found."
-    cat "${CA_KEYS}/${INDEX}.key"
+    echo "${CA_KEYS}/${INDEX}.key"
 }
 
 # Takes an alphanumeric ID or serial number, gives the certificate type amongst ca/server/client
 function ca_get_cert_type {        
-    CERT="$(ca_get_cert "$1" | openssl x509 -text)"
+    CERT="$(cat "$(ca_get_cert "$1")" | openssl x509 -text)"
     if echo "$CERT" | grep -qi "ca:true"; then
         echo "ca"
     elif echo "$CERT" | grep -qi "server authentication"; then
