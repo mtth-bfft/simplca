@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-CA_DIR="$(dirname $0)"
+CA_DIR=`pwd`
 CA_NAME="ca"
 CA_SERIAL="${CA_DIR}/serial.txt"
 CA_INDEX="${CA_DIR}/certindex.txt"
@@ -129,17 +129,20 @@ function ca_exists {
 
 # Takes an alphanumeric ID or serial number, gives the serial number
 function ca_get_index {
+    ca_exists || die "please initialise your CA first"
     [ -f "${CA_CERTS}/$1.pem" ] && echo "$1" && return
     grep -iE "/CN=$1$" "${CA_INDEX}" | awk '{ print $(NF-2) }'
 }
 
 # Takes an alphanumeric ID or serial number, gives the entier /CN= subject
 function ca_get_subject {
+    ca_exists || die "please initialise your CA first"
     cat "$(ca_get_cert "$1")" | openssl x509 -subject -noout | sed 's/subject= //'
 }
 
 # Takes an alphanumeric ID or serial number, gives the certificate path
 function ca_get_cert {
+    ca_exists || die "please initialise your CA first"
     [ -f "${CA_CERTS}/$1.pem" ] && echo "${CA_CERTS}/$1.pem" && return
     INDEX=$(ca_get_index "$1") || die "identifier not found."
     echo "${CA_CERTS}/${INDEX}.pem"
@@ -147,6 +150,7 @@ function ca_get_cert {
 
 # Takes an alphanumeric ID or serial number, gives the private key path
 function ca_get_key {
+    ca_exists || die "please initialise your CA first"
     [ -f "${CA_KEYS}/$1.key" ] && echo "${CA_KEYS}/$1.key" && return
     INDEX=$(ca_get_index "$1") || die "identifier not found."
     echo "${CA_KEYS}/${INDEX}.key"
@@ -154,6 +158,7 @@ function ca_get_key {
 
 # Takes an alphanumeric ID or serial number, gives the certificate type amongst ca/server/client
 function ca_get_cert_type {        
+    ca_exists || die "please initialise your CA first"
     CERT="$(cat "$(ca_get_cert "$1")" | openssl x509 -text)"
     if echo "$CERT" | grep -qi "ca:true"; then
         echo "ca"
@@ -166,6 +171,7 @@ function ca_get_cert_type {
 
 # Takes an alphanumeric ID or serial number, returns 0 if and only if certificate hasn't been revoked yet
 function ca_is_cert_revoked {
+    ca_exists || die "please initialise your CA first"
     INDEX="$(ca_get_index "$1")"
     ! cat "${CA_CRT}" "${CA_CRL}" | openssl verify -crl_check -CAfile /dev/stdin "${CA_CERTS}/${INDEX}.pem" &>/dev/null
 }
@@ -192,6 +198,7 @@ function ca_init {
 }
 
 function ca_list {
+    ca_exists || die "please initialise your CA first"
     echo -e "type\tstatus\tidentifier"
     for CERTID in $(cat "${CA_INDEX}" | awk '{print $(NF-2)}'); do
         INDEX="$(ca_get_index "$CERTID")" || continue
@@ -254,42 +261,48 @@ function ca_revoke {
     echo "Certificate successfully revoked, CRL updated." >&2    
 }
 
-which openssl >/dev/null 2>&1 || die "please install OpenSSL before proceeding"
-[ $# -gt 0 ] || { show_usage ; exit 1 ; }
+function ca_main {
+    [ $# -gt 0 ] || { show_usage ; exit 1 ; }
 
-# Read one arg as the main command
-CMD=$1
-CERTID=''
-shift
-case $CMD in
-    issue-client|issue-server|revoke|get-key|get-cert)
-        [ $# -gt 0 ] || die "command $CMD requires an alphanumeric argument"
-	echo "$1" | grep -qE '^[a-zA-Z0-9_-]+$' || die "invalid argument for command $CMD"
-        CERTID="$1"
-        shift
-esac
-
-# Read optional arguments
-BATCH=0
-while [ $# -gt 0 ]; do
-    case $1 in
-        -h|--help) show_usage; exit 0 ;;
-        -y|--yes) BATCH=1 ;;
-        *) die "unknown option '$1'" ;;
-    esac
+    # Read one arg as the main command
+    CMD=$1
+    CERTID=''
     shift
-done
+    case $CMD in
+        issue-client|issue-server|revoke|get-key|get-cert)
+            [ $# -gt 0 ] || die "command $CMD requires an alphanumeric argument"
+            echo "$1" | grep -qE '^[a-zA-Z0-9_-]+$' || die "invalid argument for command $CMD"
+            CERTID="$1"
+            shift
+    esac
 
-# Call the appropriate function
-case $CMD in
-    init) ca_init ;;
-    issue-server) ca_issue_server "$CERTID" ;;
-    issue-client) ca_issue_client "$CERTID" ;;
-    revoke) ca_revoke "$CERTID" ;;
-    get-key) ca_get_key "$CERTID" ;;
-    get-cert) ca_get_cert "$CERTID" ;;
-    list) ca_list ;;
-    gen-crl) ca_gen_crl ;;
-    cleanup) ca_cleanup ;;
-    *) show_usage ; exit 1 ;;
-esac
+    # Read optional arguments
+    BATCH=0
+    while [ $# -gt 0 ]; do
+        case $1 in
+            -h|--help) show_usage; exit 0 ;;
+            -y|--yes) BATCH=1 ;;
+            *) die "unknown option '$1'" ;;
+        esac
+        shift
+    done
+
+    # Call the appropriate function
+    case $CMD in
+        init) ca_init ;;
+        issue-server) ca_issue_server "$CERTID" ;;
+        issue-client) ca_issue_client "$CERTID" ;;
+        revoke) ca_revoke "$CERTID" ;;
+        get-key) ca_get_key "$CERTID" ;;
+        get-cert) ca_get_cert "$CERTID" ;;
+        list) ca_list ;;
+        gen-crl) ca_gen_crl ;;
+        cleanup) ca_cleanup ;;
+        *) show_usage ; exit 1 ;;
+    esac
+}
+
+which openssl >/dev/null 2>&1 || die "please install OpenSSL before proceeding"
+case "$0" in
+    *simplca.sh*) ca_main $@ ;;
+esac # otherwise, script is being sourced
