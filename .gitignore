@@ -1,5 +1,6 @@
 *.key
 *.pem
+*.local.sh
 certindex.txt*
 serial.txt*
 openssl.cnf

@@ -1,36 +1,33 @@
-#!/bin/bash
+#!/bin/sh
 
 # Configuration variables
 # (do not edit these, or your changes will be lost at every update:
 # instead put your customisations in a separate simplca.local.sh script)
 
-pushd `dirname $0` > /dev/null
-CA_DIR=`pwd`
-popd > /dev/null
+CA_DIR="$(dirname $0)"
 CA_NAME="ca"
-CA_KEY="${CA_DIR}/ca.key"
-CA_CRT="${CA_DIR}/ca.pem"
-CA_CRL="${CA_DIR}/crl.pem"
 CA_SERIAL="${CA_DIR}/serial.txt"
 CA_INDEX="${CA_DIR}/certindex.txt"
 CA_CERTS="${CA_DIR}/certs"
+CA_KEYS="${CA_DIR}/keys"
+CA_KEY="${CA_KEYS}/ca.key"
+CA_CRT="${CA_CERTS}/ca.pem"
+CA_CRL="${CA_DIR}/crl.pem"
 CA_CONFIG="${CA_DIR}/openssl.cnf"
 CA_SERIAL_START="100001"
 
 CRT_DURATION=3650 # days
 CRL_DURATION=10   # days
 RSA_KEYSIZE=4096
-DIGEST_ALGO=sha256
+DIGEST_ALGO="sha256"
 
 [ -r ${CA_DIR}/simplca.local.sh ] && source ${CA_DIR}/simplca.local.sh
 
-# Bash "safe" mode
-set -euo pipefail
-
 function confirm_prompt {
     [ $BATCH -eq 1 ] && return 0
-    read -r -n1 -p "${1:-Continue?} [y/N] " yn
-    echo
+    echo -n "${1:-Continue?} [y/N] " >&2
+    read -r -n1 yn
+    echo >&2
     case $yn in
         [yY]) return 0 ;;
         *) return 1 ;;
@@ -41,6 +38,9 @@ function show_usage {
     echo "Usage: $0 init [-y]" >&2
     echo "       $0 issue-server <alphanumeric_id> [-y] " >&2
     echo "       $0 issue-client <alphanumeric_id> [-y] " >&2
+    echo "       $0 get-cert <alphanumeric_id> " >&2
+    echo "       $0 get-key <alphanumeric_id> " >&2
+    echo "       $0 list " >&2
     echo "       $0 gen-crl " >&2
     echo "       $0 revoke <alphanumeric_id> [-y] " >&2
     echo "       $0 cleanup [-y] " >&2
@@ -121,14 +121,60 @@ function ca_exists {
     [ -f ${CA_CRT} ] && return 0
     [ -f ${CA_KEY} ] && return 0
     [ -d ${CA_CERTS} ] && return 0
+    [ -d ${CA_KEYS} ] && return 0
     return 1
 }
 
+# Takes an alphanumeric ID or serial number, gives the serial number
+function ca_get_index {
+    [ -f "${CA_CERTS}/$1.pem" ] && echo "$1" && return
+    grep -iE "/CN=$1$" "${CA_INDEX}" | awk '{ print $(NF-2) }'
+}
+
+# Takes an alphanumeric ID or serial number, gives the entier /CN= subject
+function ca_get_subject {
+    ca_get_cert "$1" | openssl x509 -subject -noout | sed 's/subject= //'
+}
+
+# Takes an alphanumeric ID or serial number, gives the certificate contents
+function ca_get_cert {
+    [ -f "${CA_CERTS}/$1.pem" ] && cat "${CA_CERTS}/$1.pem" && return
+    INDEX=$(ca_get_index "$1") || die "identifier not found."
+    cat "${CA_CERTS}/${INDEX}.pem"
+}
+
+# Takes an alphanumeric ID or serial number, gives the private key contents
+function ca_get_key {
+    [ -f "${CA_KEYS}/$1.key" ] && cat "${CA_KEYS}/$1.key" && return
+    INDEX=$(ca_get_index "$1") || die "identifier not found."
+    cat "${CA_KEYS}/${INDEX}.key"
+}
+
+# Takes an alphanumeric ID or serial number, gives the certificate type amongst ca/server/client
+function ca_get_cert_type {        
+    CERT="$(ca_get_cert "$1" | openssl x509 -text)"
+    if echo "$CERT" | grep -qi "ca:true"; then
+        echo "ca"
+    elif echo "$CERT" | grep -qi "server authentication"; then
+        echo "server"
+    else
+        echo "client"
+    fi
+}
+
+# Takes an alphanumeric ID or serial number, returns 0 if and only if certificate hasn't been revoked yet
+function ca_is_cert_revoked {
+    INDEX="$(ca_get_index "$1")"
+    ca_gen_crl &>/dev/null
+    ! cat "${CA_CRT}" "${CA_CRL}" | openssl verify -crl_check -CAfile /dev/stdin "${CA_CERTS}/${INDEX}.pem" &>/dev/null
+}
+
 function ca_cleanup {
-    if ca_exists && ! confirm_prompt "About to remove CA. Continue?"; then
+    if ca_exists && ! confirm_prompt "About to remove all CA certificates and keys. Continue?"; then
         die "user abort, no modification."
     fi
-    rm -rf "${CA_CONFIG}" "${CA_CERTS}" ${CA_DIR}/*.pem ${CA_DIR}/*.key ${CA_INDEX}* ${CA_SERIAL}*
+    rm -rf "${CA_CONFIG}" "${CA_CERTS}" "${CA_KEYS}" ${CA_DIR}/*.pem ${CA_DIR}/*.key ${CA_INDEX}* ${CA_SERIAL}*
+    echo "CA successfully reset to an empty state" >&2
 }
 
 function ca_init {
@@ -136,86 +182,108 @@ function ca_init {
     gen_openssl_cnf > ${CA_CONFIG}
     echo "${CA_SERIAL_START}" > ${CA_SERIAL}
     touch "${CA_INDEX}"
-    mkdir "${CA_CERTS}"
+    mkdir "${CA_CERTS}" "${CA_KEYS}"
     openssl genrsa -out "${CA_KEY}" ${RSA_KEYSIZE}
     openssl req -new -batch -x509 -key "${CA_KEY}" -config "${CA_CONFIG}" -out "${CA_CRT}"
-    openssl ca -gencrl -out "${CA_CRL}" -config "${CA_CONFIG}" -extensions v3_ca
     chmod 0600 "${CA_KEY}"
+    ca_gen_crl >/dev/null
+    echo "CA successfully initialised" >&2
+}
+
+function ca_list {
+    echo -e "type\trevoked\tidentifier"
+    for CERTID in $(cat "${CA_INDEX}" | awk '{print $(NF-2)}'); do
+        ca_is_cert_revoked "$CERTID" && revoked="yes" || revoked="no"
+        echo -e "$(ca_get_cert_type $CERTID)\t${revoked}\t$(ca_get_subject $CERTID)"
+    done
 }
 
 function ca_issue_server {
-    CSR=$(mktemp)
-    [ -f ${CA_DIR}/${CERTID}.key ] && die "identifier already in use. Please choose another one."
-    openssl req -new -batch -nodes -keyout "${CA_DIR}/${CERTID}.key" -out "${CSR}" -config "${CA_CONFIG}"
-    if confirm_prompt "About to issue a server certificate for '${CERTID}'. Continue?"; then
-        openssl ca -batch -subj "/CN=${CERTID}/" -in "${CSR}" -notext -out "${CA_DIR}/${CERTID}.pem" -config "${CA_CONFIG}" -extensions req_server
-        chmod 0600 "${CA_DIR}/${CERTID}.key"
-        rm -f "${CSR}"
-    else
-        rm -f "${CSR}" "${CA_DIR}/${CERTID}.key"
-	die "user abort, no modification."
-    fi
+    ca_exists || die "please initialise your CA first"
+    ca_get_index "$1" >/dev/null && die "identifier already in use. Please choose another one." || /bin/true
+    confirm_prompt "About to issue a server certificate for '$1'. Continue?" || exit 1
+    CSR=`mktemp`
+    TMPKEY=`mktemp`
+    openssl req -new -batch -nodes -keyout "$TMPKEY" -out "${CSR}" -config "${CA_CONFIG}" >&2
+    openssl ca -batch -subj "/CN=$1/" -in "${CSR}" -notext -config "${CA_CONFIG}" -extensions req_server >&2
+    INDEX="$(ca_get_index "$1")"
+    CERT="${CA_CERTS}/${INDEX}.pem"
+    KEY="${CA_KEYS}/${INDEX}.key"
+    mv "$TMPKEY" "$KEY"
+    chmod 0600 "$KEY"
+    rm -f "$CSR" "$TMPKEY"
+    cat "$CERT" "$KEY"
+    echo "Server certificate successfully written to ${CERT} and key to ${KEY}" >&2
 }
 
 function ca_issue_client {
-    CSR=$(mktemp)
-    [ -f ${CA_DIR}/${CERTID}.key ] && die "identifier already in use. Please choose another one."
-    openssl req -new -batch -nodes -keyout "${CA_DIR}/${CERTID}.key" -out "${CSR}" -config "${CA_CONFIG}"
-    if confirm_prompt "About to issue a client certificate for '${CERTID}'. Continue?"; then
-        openssl ca -batch -subj "/CN=${CERTID}/" -in "${CSR}" -notext -out "${CA_DIR}/${CERTID}.pem" -config "${CA_CONFIG}" -extensions req_client
-        chmod 0600 "${CA_DIR}/${CERTID}.key"
-        rm -f "${CSR}"
-    else
-        rm -f "${CSR}" "${CA_DIR}/${CERTID}.key"
-	die "user abort, no modification"
-    fi
+    ca_exists || die "please initialise your CA first"
+    ca_get_index "$1" >/dev/null && die "identifier already in use. Please choose another one." || /bin/true
+    confirm_prompt "About to issue a client certificate for '$1'. Continue?" || exit 1
+    CSR=`mktemp`
+    TMPKEY=`mktemp`
+    openssl req -new -batch -nodes -keyout "$TMPKEY" -out "${CSR}" -config "${CA_CONFIG}" >&2
+    openssl ca -batch -subj "/CN=$1/" -in "${CSR}" -notext -config "${CA_CONFIG}" -extensions req_client >&2
+    INDEX="$(ca_get_index "$1")"
+    CERT="${CA_CERTS}/${INDEX}.pem"
+    KEY="${CA_KEYS}/${INDEX}.key"
+    mv "$TMPKEY" "$KEY"
+    chmod 0600 "$KEY"
+    rm -f "$CSR" "$TMPKEY"
+    cat "$CERT" "$KEY"
+    echo "Client certificate successfully written to ${CERT} and key to ${KEY}" >&2
 }
 
 function ca_gen_crl {
-    openssl ca -batch -gencrl -keyfile "${CA_KEY}" -cert "${CA_CRT}" -out "${CA_CRL}" -config "${CA_CONFIG}"
+    ca_exists || die "please initialise your CA first"
+    openssl ca -batch -gencrl -keyfile "${CA_KEY}" -cert "${CA_CRT}" -out "${CA_CRL}" -config "${CA_CONFIG}" >&2
+    echo "CRL successfully written to ${CA_CRL}" >&2
+    cat "${CA_CRL}"
 }
 
 function ca_revoke {
-    die "not implemented yet. Sorry"
+    ca_exists || die "please initialise your CA first"
+    INDEX="$(ca_get_index "$1")" || die "identifier not found."
+    confirm_prompt "About to revoke $(ca_get_cert_type "$1") certificate for '$1'. Continue?" || exit 1
+    openssl ca -revoke "${CA_CERTS}/${INDEX}.pem" -config "${CA_CONFIG}"
+    ca_gen_crl >/dev/null
+    echo "Certificate successfully revoked, CRL updated." >&2    
 }
 
-# Check that OpenSSL is installed
 which openssl >/dev/null 2>&1 || die "please install OpenSSL before proceeding"
-
-# Read command from first argument
-[ $# -gt 0 ] || die "command keyword needed"
-CMD=$1
-shift
-CERTID=''
-case $CMD in
-    issue-client|issue-server|revoke)
-        [ $# -gt 0 ] || die "command $CMD requires an alphanumeric argument"
-	[[ "$1" =~ ^[a-zA-Z0-9_-]+$ ]] || die "invalid argument for command $CMD"
-        CERTID=$1
-	shift ;;
-    init|cleanup|gen-crl) ;;
-    *)
-        die "unknown command $CMD"
-esac
+[ $# -gt 0 ] || { show_usage ; exit 1 ; }
 
 # Read optional arguments
 BATCH=0
-while [ $# -gt 0 ]; do
+while true; do
     case $1 in
         -h|--help) show_usage; exit 0 ;;
         -y|--yes) BATCH=1 ;;
-        *) die "Invalid command line option: $1" ;;
+        *) break ;;
     esac
     shift
 done
 
+# Read one option as the main command
+CMD=$1
+shift
+case $CMD in
+    issue-client|issue-server|revoke|get-key|get-cert)
+        [ $# -gt 0 ] || die "command $CMD requires an alphanumeric argument"
+	echo "$1" | grep -qE '^[a-zA-Z0-9_-]+$' || die "invalid argument for command $CMD"
+esac
+
 # Call the appropriate function
 case $CMD in
     init) ca_init ;;
-    issue-server) ca_issue_server ;;
-    issue-client) ca_issue_client ;;
+    issue-server) ca_issue_server "$1" ;;
+    issue-client) ca_issue_client "$1" ;;
+    revoke) ca_revoke "$1" ;;
+    get-key) ca_get_key "$1" ;;
+    get-cert) ca_get_cert "$1" ;;
+    list) ca_list ;;
     gen-crl) ca_gen_crl ;;
-    revoke) ca_revoke ;;
     cleanup) ca_cleanup ;;
+    *)
+        die "unknown command $CMD"
 esac
-
