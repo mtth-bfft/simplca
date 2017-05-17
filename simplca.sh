@@ -169,11 +169,15 @@ function ca_get_cert_type {
     fi
 }
 
-# Takes an alphanumeric ID or serial number, returns 0 if and only if certificate hasn't been revoked yet
-function ca_is_cert_revoked {
+# Returns 0 if certificate is found and valid, 1 if certificate was not found, 2 if it was revoked
+function ca_get_status {
     ca_exists || die "please initialise your CA first"
-    INDEX="$(ca_get_index "$1")"
-    ! cat "${CA_CRT}" "${CA_CRL}" | openssl verify -crl_check -CAfile /dev/stdin "${CA_CERTS}/${INDEX}.pem" &>/dev/null
+    CERT=$(ca_get_cert "$1") || die "identifier not found"
+    if cat "$CA_CRT" "$CA_CRL" | openssl verify -crl_check -CAfile /dev/stdin "$CERT" >&2; then
+        echo "ok"; return 0
+    else
+        echo "revoked"; return 2
+    fi
 }
 
 function ca_cleanup {
@@ -202,8 +206,8 @@ function ca_list {
     echo -e "type\tstatus\tidentifier"
     for CERTID in $(cat "${CA_INDEX}" | awk '{print $(NF-2)}'); do
         INDEX="$(ca_get_index "$CERTID")" || continue
-        ca_is_cert_revoked "$INDEX" && revoked="revoked" || revoked="valid"
-        echo -e "$(ca_get_cert_type $INDEX)\t${revoked}\t$(ca_get_subject $INDEX)"
+        ca_get_status "$INDEX" &>/dev/null && status="valid" || status="revoked"
+        echo -e "$(ca_get_cert_type $INDEX)\t${status}\t$(ca_get_subject $INDEX)"
     done
 }
 
@@ -269,7 +273,7 @@ function ca_main {
     CERTID=''
     shift
     case $CMD in
-        issue-client|issue-server|revoke|get-key|get-cert)
+        issue-client|issue-server|revoke|get-key|get-cert|get-status)
             [ $# -gt 0 ] || die "command $CMD requires an alphanumeric argument"
             echo "$1" | grep -qE '^[a-zA-Z0-9_-]+$' || die "invalid argument for command $CMD"
             CERTID="$1"
@@ -295,6 +299,7 @@ function ca_main {
         revoke) ca_revoke "$CERTID" ;;
         get-key) ca_get_key "$CERTID" ;;
         get-cert) ca_get_cert "$CERTID" ;;
+        get-status) ca_get_status "$CERTID" ;;
         list) ca_list ;;
         gen-crl) ca_gen_crl ;;
         cleanup) ca_cleanup ;;
