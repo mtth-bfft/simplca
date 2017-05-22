@@ -137,7 +137,8 @@ function ca_get_index {
 # Takes an alphanumeric ID or serial number, gives the entier /CN= subject
 function ca_get_subject {
     ca_exists || die "please initialise your CA first"
-    cat "$(ca_get_cert "$1")" | openssl x509 -subject -noout | sed 's/subject= //'
+    cat "$(ca_get_cert "$1")" | openssl x509 -subject -noout | \
+        sed -re 's/subject= //' -e 's#^/CN=##'
 }
 
 # Takes an alphanumeric ID or serial number, gives the certificate path
