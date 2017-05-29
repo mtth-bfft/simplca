@@ -226,7 +226,7 @@ function ca_issue {
             { ca_warn "ca_issue takes an alphanumeric identifier"; return 1; }
     [ -f "$CA_CONFIG" ] || ca_init || return 1
     local crt="${CA_CERTS}/$2.pem"
-    local key="${CA_KEYS}/$2.pem"
+    local key="${CA_KEYS}/$2.key"
     [ -f "$crt" -o -f "$key" ] && ca_warn "identifier already in use, choose another one." && return 1
     ca_confirm_prompt "About to issue a $1 certificate for '$2'. Continue?" || return 1
     local tmp=`mktemp -d`
@@ -285,7 +285,7 @@ function ca_main {
 }
 
 if ! openssl version &>/dev/null; then
-    warn "please install OpenSSL before proceeding"
+    ca_warn "please install OpenSSL before proceeding"
     exit 1
 fi
 case "$0" in

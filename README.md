@@ -38,5 +38,5 @@ If you need to restart from scratch after your tests, the following command will
 1. OpenSSL's manual is painful to read, but [read the fine manual](https://www.feistyduck.com/books/openssl-cookbook/)
    before using this software;
 2. Read the contents of this script, and understand at least its basic steps;
-3. Handle CA operations offline, or at least move client private keys offline once
+3. Handle CA operations offline, or at least move private keys offline once
    they are generated.
