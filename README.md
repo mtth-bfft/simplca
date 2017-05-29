@@ -2,7 +2,7 @@
 
 This standalone script allows you to manage a simple certification authority without fiddling with intermediate authorities, OpenSSL commands, or x509 extensions designed at the time Netscape was still a thing.
 
-Unlike its predecessors, it does not rely on easy-rsa, it is fairly straightforward to parse and understand (< 250 lines), and doesn't try to cover all your possible needs with dozens of commandline options. Instead, you are given a "sane" OpenSSL configuration file, which you are encouraged to read and understand, and which you can edit without it being overwritten at every update.
+Unlike its predecessors, it does not rely on easy-rsa, it is fairly straightforward to parse and understand (< 300 lines), and doesn't try to cover all your possible needs with dozens of commandline options. Instead, you are given a "sane" OpenSSL configuration file, which you are encouraged to read and understand, and which you can edit without it being overwritten at every update.
 
 ## Usage
 
@@ -17,9 +17,9 @@ Initialise an empty certification authority in the same directory:
 
 Issue server and/or client certificates as you need. Server and client certificates are what you expect to see in a mutually-authenticated TLS connection. Each command generates a certificate (.pem) and private key (.key) in the CA directory with the associated name and sane permissions. Identifiers should only contain letters, digits, underscores and dashes (you don't want to handle UTF-8 in x509 and OpenSSL's configurations):
 
-    ./simplca.sh issue-server "my-private-web-server"
-    ./simplca.sh issue-client "my-authenticated-client"
-    ./simplca.sh issue-client "another-self-explanatory-id"
+    ./simplca.sh issue server "my-private-web-server"
+    ./simplca.sh issue client "my-authenticated-client"
+    ./simplca.sh issue client "another-self-explanatory-id"
 
 If a private key leaks, or if you password-protect one and lose the password, you might want to revoke an issued certificate (server or client):
 
@@ -40,4 +40,3 @@ If you need to restart from scratch after your tests, the following command will
 2. Read the contents of this script, and understand at least its basic steps;
 3. Handle CA operations offline, or at least move client private keys offline once
    they are generated.
-
