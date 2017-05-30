@@ -207,9 +207,11 @@ function ca_init {
 function ca_list {
     echo -e "type\tstatus\tidentifier"
     [ -d "$CA_CERTS" ] || return 0
-    for certid in $(find "$CA_CERTS" -name "*.pem" -printf "%f\n" | sed 's/.pem//'); do
+    for cert in ${CA_CERTS}/*.pem; do
+        local certid=$(basename "$cert" | sed 's/.pem//')
         local status=$(ca_get_status "$certid" 2>/dev/null) || /bin/true
         local type=$(ca_get_cert_type "$certid")
+        [ "$type" == "ca" ] && continue
         echo -e "${type}\t${status}\t${certid}"
     done
 }
